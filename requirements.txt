@@ -1,0 +1,12 @@
+opencv-python
+ultralytics
+ipython<9.0.0
+matplotlib
+tensorflow==2.18.0
+numpy<2.0.0
+tqdm
+protobuf<5
+torch==2.9.0
+fsspec<=2024.9.0
+wrapt<2.0.0
+packaging<24.0

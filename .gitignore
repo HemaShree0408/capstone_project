@@ -1,0 +1,53 @@
+# ----------------------------
+# 🐍 Python
+# ----------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env
+
+# ----------------------------
+# 📦 Datasets (IGNORE HEAVY)
+# ----------------------------
+FINAL_SSD_DATASET/
+Human Activity Recognition - Video Dataset/
+Human Activity Recognition - Video Dataset__DCT/
+Human Activity Recognition - Video Dataset_annotations/
+
+# ----------------------------
+# 🎥 Media / Raw Data
+# ----------------------------
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.npy
+*.bin
+
+# ----------------------------
+# 🤖 MODEL FILES (USE LFS INSTEAD)
+# ----------------------------
+# Do NOT track large models normally
+*.h5
+*.pt
+*.pth
+
+# ----------------------------
+# ⚙️ Build / Logs
+# ----------------------------
+*.log
+*.o
+*.exe
+*.zip
+
+ffmpeg_build/
+ffmpeg_sources/
+
+# ----------------------------
+# 🧰 VS Code
+# ----------------------------
+.vscode/
