@@ -1,12 +1,23 @@
+import sys
 import os
 import numpy as np
 import tensorflow as tf
-from model import SSD300_H264
-from data_loader import H264DatasetGenerator
+
+# Add the current directory to sys.path to support local imports when run from elsewhere
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from model import SSD300_H264
+    from data_loader import H264DatasetGenerator
+except ImportError:
+    from .model import SSD300_H264
+    from .data_loader import H264DatasetGenerator
+
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
 # --- CONFIG ---
-DATASET_PATH = r"C:\Users\PESU-RF\capstone 211\capstone_project\FINAL_SSD_DATASET"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DATASET_PATH = os.path.join(BASE_DIR, "FINAL_SSD_DATASET")
 BATCH_SIZE = 32
 EPOCHS = 50
 
@@ -52,7 +63,7 @@ def train():
 
     # --- 4. CALLBACKS ---
     callbacks = [
-        ModelCheckpoint("best_model.h5", save_best_only=True, monitor="val_loss", verbose=1),
+        ModelCheckpoint(os.path.join(BASE_DIR, "models", "best_model.h5"), save_best_only=True, monitor="val_loss", verbose=1),
         EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True, verbose=1),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, verbose=1)
     ]
@@ -66,7 +77,7 @@ def train():
         callbacks=callbacks
     )
 
-    model.save("final_model.h5")
+    model.save(os.path.join(BASE_DIR, "models", "final_model.h5"))
     print("\n🎉 Training Complete!")
 
 if __name__ == "__main__":

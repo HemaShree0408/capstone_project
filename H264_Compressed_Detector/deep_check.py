@@ -1,7 +1,8 @@
 import numpy as np
 import os
 
-OUT = r"C:\Users\PESU-RF\capstone 211\capstone_project\Human Activity Recognition - Video Dataset__DCT"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+OUT = os.path.join(BASE_DIR, "Human Activity Recognition - Video Dataset__DCT")
 
 print("=" * 65)
 print("DEEP DATA VALIDATION")
@@ -11,7 +12,7 @@ print("=" * 65)
 sample_video = None
 sample_files = []
 for root, dirs, files in os.walk(OUT):
-    npys = sorted([f for f in files if f.endswith('.npy')])
+    npys = sorted([f for f in files if f.endswith('.npy')], key=lambda f: int(f.split('.')[0]))
     if len(npys) >= 2:
         sample_video = root
         sample_files = [os.path.join(root, f) for f in npys[:2]]

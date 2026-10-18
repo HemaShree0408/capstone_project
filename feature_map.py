@@ -13,7 +13,7 @@ def build_frequency_attention_maps(filename, frame_target=1):
         return
 
     # Header and Data definitions
-    HDR_FORMAT = '<Iiiii'
+    HDR_FORMAT    = '<qiiii'
     HDR_SIZE = struct.calcsize(HDR_FORMAT)
     
     # 16 * 48 * 2 elements of int16 (2 bytes each) = 3072 bytes
@@ -160,6 +160,87 @@ def build_frequency_attention_maps(filename, frame_target=1):
     plt.savefig(output_png, dpi=150)
     print(f"Saved visualization to '{output_png}'! Check your Capstone folder!")
     plt.show()
+
+
+# -----------------------------------------------------------------------
+# PIPELINE HELPER  (called by i_frame_extractor.py)
+# Does the same work as build_frequency_attention_maps but:
+#   - accepts the bin path and the frame number to process
+#   - saves the result as a .npy file to npy_save_path
+#   - does NOT show any plot (no popup during batch processing)
+# -----------------------------------------------------------------------
+def build_and_save_npy(bin_path, frame_target, npy_save_path):
+
+    # -- same header / size definitions as the main function above --
+    HDR_FORMAT    = '<qiiii'
+    HDR_SIZE      = struct.calcsize(HDR_FORMAT)
+    COEFF_BYTES   = 16 * 48 * 2 * 2
+    LUMA_DC_BYTES = 3 * 16 * 2 * 2
+    REC_SIZE      = HDR_SIZE + COEFF_BYTES + LUMA_DC_BYTES
+
+    file_size = os.path.getsize(bin_path)
+    num_mbs   = file_size // REC_SIZE
+
+    # frequency band indices
+    low_indices  = [0, 1, 4]
+    mid_indices  = [2, 3, 5, 6, 8]
+    high_indices = [7, 9, 10, 11, 12, 13, 14, 15]
+
+    # Pass 1 - find grid size
+    max_mb_x = 0
+    max_mb_y = 0
+    found    = False
+    with open(bin_path, 'rb') as f:
+        for _ in range(num_mbs):
+            chunk = f.read(REC_SIZE)
+            frame_num, mb_x, mb_y, mb_type, cbp = struct.unpack(HDR_FORMAT, chunk[:HDR_SIZE])
+            if frame_num == frame_target:
+                found = True
+                if mb_x > max_mb_x: max_mb_x = mb_x
+                if mb_y > max_mb_y: max_mb_y = mb_y
+
+    if not found:
+        print(f"    [feature_map] No macroblocks found for frame {frame_target}. Skipping.")
+        return False
+
+    grid_rows = (max_mb_y + 1) * 4
+    grid_cols = (max_mb_x + 1) * 4
+    feature_tensor = np.zeros((grid_rows, grid_cols, 3), dtype=np.float32)
+
+    # Pass 2 - fill tensor
+    with open(bin_path, 'rb') as f:
+        for _ in range(num_mbs):
+            chunk = f.read(REC_SIZE)
+            frame_num, mb_x, mb_y, mb_type, cbp = struct.unpack(HDR_FORMAT, chunk[:HDR_SIZE])
+            if frame_num != frame_target:
+                continue
+
+            coeffs_raw  = np.frombuffer(chunk[HDR_SIZE : HDR_SIZE + COEFF_BYTES], dtype=np.int16)
+            dequantized = coeffs_raw.astype(np.float32)
+            luma_blocks = dequantized[:256]
+
+            for block_idx in range(16):
+                start      = block_idx * 16
+                block_coeffs = luma_blocks[start : start + 16]
+
+                e_low  = np.sum(np.square(block_coeffs[low_indices]))
+                e_mid  = np.sum(np.square(block_coeffs[mid_indices]))
+                e_high = np.sum(np.square(block_coeffs[high_indices]))
+
+                block_col  = (block_idx % 2) + ((block_idx // 4) % 2) * 2
+                block_row  = ((block_idx // 2) % 2) + ((block_idx // 8) % 2) * 2
+                global_row = mb_y * 4 + block_row
+                global_col = mb_x * 4 + block_col
+
+                feature_tensor[global_row, global_col, 0] = np.log1p(e_low)
+                feature_tensor[global_row, global_col, 1] = np.log1p(e_mid)
+                feature_tensor[global_row, global_col, 2] = np.log1p(e_high)
+
+    # Save as npy - overwrite if already exists
+    np.save(npy_save_path, feature_tensor)
+    print(f"    [feature_map] Saved npy: {npy_save_path}  shape={feature_tensor.shape}")
+    return True
+
 
 if __name__ == "__main__":
     build_frequency_attention_maps('coeffs.bin', frame_target=1)

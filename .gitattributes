@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:14d248c4f8754ee49f76508ea51ff99e5c780d8f700ff15f96e6a37d3ff1399f
-size 176
+# Normalise line endings of text files in the repository
+* text=auto
+*.patch -text
+*.dll binary
+*.docx binary
+*.png binary

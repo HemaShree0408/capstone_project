@@ -1,0 +1,118 @@
+# All relative paths are resolved against the Action_Recognition/ folder.
+
+# ============================================
+# DATASET CONFIGURATION
+# ============================================
+dataset:
+  name: "custom_action_recognition"
+  # Output of prepare_action_dataset.py (its default --output_dir)
+  data_root: "data/raw"
+  motion_vectors_dir: "data/raw/motion_vectors"   # <video>/<frame>.npy cropped MVs
+  bboxes_dir: "data/raw/bboxes"                   # <video>_bboxes.csv
+  manifest_csv: "data/raw/video_manifest.csv"     # video -> label/resolution (written by prepare)
+
+  # Optional CSV (columns: video_name,label) that overrides all other label sources.
+  # Without it, labels come from the class sub-folder recorded in the manifest
+  # (videos/Walking/x.mp4 -> walking) or else from the video name (Walking_01 -> walking).
+  labels_csv: null
+
+  # Clip configuration
+  num_frames: 10                            # Consecutive P-frames per sample (input = 2*num_frames channels)
+  frame_size: 224                           # TemporalCNN input resolution
+  clip_stride: 4                            # Sliding-window step for training clips
+  val_clip_stride: 10                       # Step for validation clips (non-overlapping)
+  max_frame_gap: 4                          # Clips never span a gap larger than this (lost person, I-frames...)
+
+  # Crop configuration (must not exceed --padding_ratio used in prepare_action_dataset.py,
+  # since MVs outside that margin were discarded there)
+  bbox_padding: 0.15
+  box_mode: "largest"                       # "largest" person per frame, or "union" of all persons
+
+  # Motion vector normalization: pixel displacement clipped to [-range, range] -> [-1, 1]
+  motion_norm_range: 20.0
+
+# ============================================
+# DATA SPLIT CONFIGURATION
+# ============================================
+data_split:
+  # "video": hold out whole videos per class (needs >= 2 videos per class)
+  # "temporal": first 80% of every video trains, last 20% validates
+  # "auto": "video" when possible, otherwise "temporal"
+  strategy: "auto"
+  val_ratio: 0.2
+  random_seed: 42
+
+# ============================================
+# MODEL CONFIGURATION
+# ============================================
+model:
+  name: "TemporalCNN"                       # conv1-5 + fc6(4096) + fc7(2048) + fc8(num classes)
+  # Number of classes and input channels are derived from the data automatically.
+
+  # Dropout rates. temporal_cls.prototxt uses 0.9 / 0.8 for UCF-101 scale data;
+  # lower values converge much faster on small custom datasets.
+  dropout_fc6: 0.7
+  dropout_fc7: 0.5
+
+  # The network is trained from scratch (no pretrained weights exist for 20-channel MV input),
+  # so freezing layers would freeze random weights. Keep false.
+  freeze_backbone: false
+
+# ============================================
+# TRAINING CONFIGURATION
+# ============================================
+training:
+  batch_size: 32                            # ~6 GB VRAM with mixed precision; use 16 on 4 GB cards
+  num_epochs: 40
+  mixed_precision: true                     # bf16 on RTX 30xx/40xx/50xx, fp16 on older GPUs
+  optimizer: "adam"                         # "adam" or "sgd"
+  learning_rate: 0.0001
+  weight_decay: 0.0005
+  momentum: 0.9                             # SGD only
+  label_smoothing: 0.1
+  class_weighted_loss: true                 # Balance classes with different clip counts
+  augment_hflip: true                       # Random horizontal flip (dx negated)
+
+  # Which validation accuracy picks the best model: "clip" or "video"
+  # (video = clip probabilities averaged per video; only meaningful with the "video" split)
+  selection_metric: "clip"
+
+  # Learning rate scheduler
+  scheduler:
+    type: "ReduceLROnPlateau"               # or "StepLR"
+    factor: 0.5
+    patience: 3
+    step_size: 10                           # StepLR only
+    min_lr: 0.000001
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 8
+
+  # Gradient clipping
+  gradient_clip: 5.0
+
+  # Checkpointing: best_model.pth, last_model.pth, training_history.json, dataset_split.json
+  checkpoint_dir: "models"
+
+# ============================================
+# INFERENCE CONFIGURATION
+# ============================================
+inference:
+  model_path: "models/best_model.pth"
+  batch_size: 32
+  clip_stride: 5
+
+# ============================================
+# LOGGING & DEVICE
+# ============================================
+device: "cuda"                              # Training stops with an error if no CUDA GPU is found
+num_workers: 4                              # CPU workers building clips for the GPU (0 = main process)
+pin_memory: true
+seed: 42
+
+logging:
+  log_dir: "logs"
+  log_file: "training_log.txt"
+  verbose: true

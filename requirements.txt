@@ -1,12 +1,35 @@
-opencv-python
-ultralytics
-ipython<9.0.0
-matplotlib
-tensorflow==2.18.0
-numpy<2.0.0
-tqdm
-protobuf<5
-torch==2.9.0
-fsspec<=2024.9.0
-wrapt<2.0.0
-packaging<24.0
+# Compressed-domain detection, tracking and action recognition
+# Tested with Python 3.12 on Windows 11 (versions = the ones installed in venv/).
+#
+# Install:
+#   python -m venv venv
+#   venv\Scripts\activate
+#   pip install -r requirements.txt
+#
+# PyTorch: the default PyPI wheel on Windows is CPU-only. For an NVIDIA GPU install the
+# CUDA build FIRST (it then satisfies the torch/torchvision lines below), e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# (see https://pytorch.org/get-started for other CUDA versions)
+#
+# The custom FFmpeg build is NOT a pip package: it lives in FFmpeg/FFmpeg/ (see README).
+
+# --- Core numerics / video I/O ---
+numpy>=2.0                 # tested 2.5.0
+opencv-python>=4.8         # tested 5.0.0.93
+pillow>=10.0               # tested 12.3.0
+imageio>=2.30              # tested 2.37.3  (RGB decode/encode for rendering)
+imageio-ffmpeg>=0.5        # tested 0.6.0   (stock FFmpeg binary used for RGB video I/O)
+matplotlib>=3.7            # tested 3.11.0  (feature-map plots, benchmark figures)
+
+# --- I-frame object detector (SSD300_H264, Keras/TensorFlow) ---
+tensorflow>=2.16           # tested 2.21.0 (CPU-only on native Windows; GPU needs WSL2/Linux)
+h5py>=3.10                 # tested 3.14.0 (loads models/best_model.h5)
+
+# --- Action recognition model (TemporalCNN, PyTorch) ---
+torch>=2.3                 # tested 2.14.1
+pyyaml>=6.0                # tested 6.0.3  (Action_Recognition/config/config.yaml)
+
+# --- Benchmark (benchmark_detection.py) ---
+ultralytics>=8.3           # tested 8.4.182 (YOLO baseline; also installs torchvision)
+psutil>=5.9                # tested 7.2.2   (CPU-time / RAM measurement)
+# pynvml                   # optional: GPU power / energy measurement

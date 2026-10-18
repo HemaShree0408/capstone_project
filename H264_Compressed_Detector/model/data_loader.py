@@ -16,29 +16,17 @@ class H264DatasetGenerator(Sequence):
 
         all_samples = sorted([f.replace('.npy', '') for f in os.listdir(self.maps_dir) if f.endswith('.npy')])
 
-        # Group by video name: 'Activity_(ID)_frame' -> 'Activity_(ID)'
-        video_names = sorted(list(set(['_'.join(f.split('_')[:-1]) for f in all_samples])))
-        
-        np.random.seed(42) # Seed to keep splits identical across train/val/test generators
-        np.random.shuffle(video_names)
+        np.random.seed(42)
+        np.random.shuffle(all_samples)
 
-        num_videos = len(video_names)
-        train_end = int(num_videos * 0.90)
-        val_end = int(num_videos * 0.95)
+        split_idx = int(len(all_samples) * split_ratio)
 
         if mode == "train":
-            selected_videos = set(video_names[:train_end])
-        elif mode == "val":
-            selected_videos = set(video_names[train_end:val_end])
-        elif mode == "test":
-            selected_videos = set(video_names[val_end:])
+            self.sample_names = all_samples[:split_idx]
         else:
-            raise ValueError("Mode must be 'train', 'val', or 'test'.")
+            self.sample_names = all_samples[split_idx:]
 
-        # Select only frames that belong to the chosen videos
-        self.sample_names = [f for f in all_samples if '_'.join(f.split('_')[:-1]) in selected_videos]
-
-        print(f"✅ Loaded {len(self.sample_names)} frames from {len(selected_videos)} videos for {mode}")
+        print(f"✅ Loaded {len(self.sample_names)} samples for {mode}")
 
     def __len__(self):
         return int(np.floor(len(self.sample_names) / self.batch_size))

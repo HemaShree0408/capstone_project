@@ -1,53 +1,46 @@
-# ----------------------------
-# 🐍 Python
-# ----------------------------
+# ---------- Python ----------
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Virtual environment
+*.py[cod]
 venv/
 .env
+.vscode/
+.idea/
 
-# ----------------------------
-# 📦 Datasets (IGNORE HEAVY)
-# ----------------------------
-FINAL_SSD_DATASET/
-Human Activity Recognition - Video Dataset/
-Human Activity Recognition - Video Dataset__DCT/
-Human Activity Recognition - Video Dataset_annotations/
-
-# ----------------------------
-# 🎥 Media / Raw Data
-# ----------------------------
+# ---------- Large / private / generated (see README "Not in the git repository") ----------
+# Custom FFmpeg build (several GB) -> rebuilt from ffmpeg_patch/
+FFmpeg/
+# Old snapshots and legacy data
+archive/
+# Model weights (models/best_model.h5 = 507 MB)
+*.h5
+*.pt
+*.pth
+*.keras
+# Videos (contain identifiable people) and rendered outputs
 *.mp4
 *.avi
 *.mov
 *.mkv
+results/previous_outputs/images/
+results/pipeline_output/
+results/visualizations/_tmp_*/
+# Extractor intermediates
 *.npy
 *.bin
-
-# ----------------------------
-# 🤖 MODEL FILES (USE LFS INSTEAD)
-# ----------------------------
-# Do NOT track large models normally
-*.h5
-*.pt
-*.pth
-
-# ----------------------------
-# ⚙️ Build / Logs
-# ----------------------------
+temp_proc_*/
+STRICT_FINAL_*
+video_metadata.json
+# Datasets
+FINAL_SSD_DATASET/
+Human Activity Recognition - Video Dataset*/
+Action_Recognition/data/
+Action_Recognition/models/
+Action_Recognition/logs/
+results/benchmark/work/
+# Third-party paper text (cited in README instead)
+docs/paper.txt
+# Build / logs / archives
 *.log
 *.o
 *.exe
 *.zip
-
-ffmpeg_build/
-ffmpeg_sources/
-
-# ----------------------------
-# 🧰 VS Code
-# ----------------------------
-.vscode/

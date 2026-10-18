@@ -1,0 +1,492 @@
+diff --git a/fftools/fftools.manifest b/fftools/fftools.manifest
+index f2708ecb13..52b64bc4ae 100644
+--- a/fftools/fftools.manifest
++++ b/fftools/fftools.manifest
+@@ -1,9 +1,10 @@
+ <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+-  <asmv3:application>
+-    <asmv3:windowsSettings>
+-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+-      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+-    </asmv3:windowsSettings>
+-  </asmv3:application>
++<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
++  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
++    <security>
++      <requestedPrivileges>
++        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
++      </requestedPrivileges>
++    </security>
++  </trustInfo>
+ </assembly>
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index 9f7ef689c5..2d9fecf4bc 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -429,7 +429,8 @@ OBJS-$(CONFIG_H264_DECODER)            += h264dec.o h264_cabac.o h264_cavlc.o \
+                                           h264_direct.o h264_loopfilter.o  \
+                                           h264_mb.o h264_picture.o \
+                                           h264_refs.o \
+-                                          h264_slice.o h264data.o h274.o
++                                          h264_slice.o h264data.o h274.o \
++                                          h264_coeff_extract.o
+ OBJS-$(CONFIG_H264_AMF_ENCODER)        += amfenc_h264.o
+ OBJS-$(CONFIG_H264_AMF_DECODER)        += amfdec.o
+ OBJS-$(CONFIG_H264_CUVID_DECODER)      += cuviddec.o
+diff --git a/libavcodec/h264_coeff_extract.c b/libavcodec/h264_coeff_extract.c
+new file mode 100644
+index 0000000000..6716177fc4
+--- /dev/null
++++ b/libavcodec/h264_coeff_extract.c
+@@ -0,0 +1,188 @@
++#include "h264_coeff_extract.h"
++#include "h264dec.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++/* -----------------------------------------------------------------------
++ * Global file handles
++ * ----------------------------------------------------------------------- */
++static FILE *g_file_i = NULL;  /* I-frame DCT coefficients  → STRICT_FINAL_I.bin */
++static FILE *g_file_p = NULL;  /* P-frame motion vectors    → STRICT_FINAL_P.bin */
++
++/* Running frame counter so each decoded frame gets a sequential index.
++ * The counter is shared: it increments whenever we see mb_x==0 && mb_y==0
++ * in ff_h264_extract_mvs(), i.e. once per P-frame. */
++static int64_t g_p_frame_idx = 0;
++
++/* -----------------------------------------------------------------------
++ * Init: open both output files
++ * ----------------------------------------------------------------------- */
++int ff_h264_coeff_extract_init(AVCodecContext *avctx)
++{
++    const char *filename = getenv("H264_COEFF_EXTRACT_FILE");
++    if (!filename)
++        filename = "STRICT_FINAL";
++
++    /* --- I-frame file --- */
++    char name_i[1024];
++    snprintf(name_i, sizeof(name_i), "%s_I.bin", filename);
++    g_file_i = fopen(name_i, "wb");
++    if (!g_file_i) {
++        av_log(avctx, AV_LOG_ERROR,
++               "H264 Extractor: Failed to open I-Frame bin: %s\n", name_i);
++        return -1;
++    }
++    av_log(avctx, AV_LOG_INFO,
++           "H264 Extractor: I-Frame extraction active. Output: %s\n", name_i);
++
++    /* --- P-frame MV file --- */
++    char name_p[1024];
++    snprintf(name_p, sizeof(name_p), "%s_P.bin", filename);
++    g_file_p = fopen(name_p, "wb");
++    if (!g_file_p) {
++        av_log(avctx, AV_LOG_ERROR,
++               "H264 Extractor: Failed to open P-Frame MV bin: %s\n", name_p);
++        fclose(g_file_i);
++        g_file_i = NULL;
++        return -1;
++    }
++    av_log(avctx, AV_LOG_INFO,
++           "H264 Extractor: P-Frame MV extraction active. Output: %s\n", name_p);
++
++    g_p_frame_idx = 0;
++    return 0;
++}
++
++/* -----------------------------------------------------------------------
++ * Close: flush and close both files
++ * ----------------------------------------------------------------------- */
++void ff_h264_coeff_extract_close(void)
++{
++    if (g_file_i) { fclose(g_file_i); g_file_i = NULL; }
++    if (g_file_p) { fclose(g_file_p); g_file_p = NULL; }
++}
++
++/* -----------------------------------------------------------------------
++ * ff_h264_extract_coeffs – I-frame DCT coefficient dump (unchanged logic)
++ * ----------------------------------------------------------------------- */
++int ff_h264_extract_coeffs(const H264Context *h, const H264SliceContext *sl)
++{
++    /* ONLY process I-Frames */
++    if (sl->slice_type != AV_PICTURE_TYPE_I || !g_file_i)
++        return 0;
++
++    if (sl->mb_x == 0 && sl->mb_y == 0) {
++        if (h && h->avctx)
++            av_log(h->avctx, AV_LOG_INFO,
++                   "[EXTRACTION] Processing I-Frame (PTS %lld)\n",
++                   h->cur_pic_ptr ? h->cur_pic_ptr->f->pts : -1);
++    }
++
++    /* Per-macroblock binary header */
++    struct {
++        int64_t pts;
++        int32_t mb_x;
++        int32_t mb_y;
++        int32_t qp;
++        int32_t slice_type;
++    } header = {
++        h->cur_pic_ptr ? h->cur_pic_ptr->f->pts : -1,
++        sl->mb_x,
++        sl->mb_y,
++        sl->qscale,
++        (int32_t)sl->slice_type
++    };
++    fwrite(&header, sizeof(header), 1, g_file_i);
++
++    /* AC coefficients (3072 bytes) */
++    fwrite(sl->mb, 1, 16 * 48 * 2 * 2, g_file_i);
++
++    /* Luma DC coefficients (192 bytes) */
++    fwrite(sl->mb_luma_dc, 1, 16 * 3 * 4, g_file_i);
++
++    return 1; /* skip pixel reconstruction for I-frames */
++}
++
++/* -----------------------------------------------------------------------
++ * ff_h264_extract_mvs – P-frame motion vector dump
++ *
++ * Called from the same hook points as ff_h264_extract_coeffs() in
++ * h264_slice.c, immediately after ff_h264_decode_mb_cabac/cavlc().
++ *
++ * Rules:
++ *   - P-frame (slice_type_nos == AV_PICTURE_TYPE_P):
++ *       Write one record per macroblock containing the 16 list-0
++ *       sub-block MVs (quarter-pixel, signed int16_t pairs dx/dy).
++ *   - B-frame: silently ignored (return 0, normal decoding continues).
++ *   - I-frame: silently ignored here (handled by ff_h264_extract_coeffs).
++ *
++ * On-disk record format (little-endian, fixed size = 80 bytes):
++ *
++ *   int64_t  frame_idx          sequential P-frame index (0, 1, 2, …)
++ *   int32_t  mb_x               macroblock column
++ *   int32_t  mb_y               macroblock row
++ *   int16_t  mv[16][2]          16 × (dx, dy) in quarter-pixel units
++ *                               from list-0 motion_val; (0,0) for skipped
++ *
++ * Total: 8 + 4 + 4 + 16*2*2 = 80 bytes per macroblock record.
++ *
++ * The Python reader reconstructs the dominant MV for each macroblock by
++ * averaging (or taking the median of) the 16 sub-block vectors.
++ * ----------------------------------------------------------------------- */
++void ff_h264_extract_mvs(const H264Context *h, const H264SliceContext *sl)
++{
++    /* Only care about P-frames; skip I and B */
++    if (!g_file_p)
++        return;
++    if (sl->slice_type_nos != AV_PICTURE_TYPE_P)
++        return;
++
++    /* Detect frame boundary: when we're at the first macroblock (0,0)
++     * of a new P-frame, bump the sequential frame counter. */
++    if (sl->mb_x == 0 && sl->mb_y == 0) {
++        if (h && h->avctx)
++            av_log(h->avctx, AV_LOG_INFO,
++                   "[MV EXTRACTION] P-Frame idx=%lld (PTS %lld)\n",
++                   (long long)g_p_frame_idx,
++                   h->cur_pic_ptr ? (long long)h->cur_pic_ptr->f->pts : -1LL);
++        g_p_frame_idx++;
++    }
++
++    /* ------------------------------------------------------------------
++     * Read the 16 list-0 motion vectors for this macroblock.
++     *
++     * h->cur_pic.motion_val[list][b_xy] is int16_t[2] = {dx, dy}
++     * where b_xy = 4*mb_x + 4*mb_y * h->b_stride  (top-left sub-block).
++     * The macroblock spans a 4×4 grid of sub-blocks in b-space.
++     * ------------------------------------------------------------------ */
++    int16_t mv_out[16][2];   /* 16 sub-block (dx,dy) pairs */
++    memset(mv_out, 0, sizeof(mv_out));
++
++    if (h->cur_pic.motion_val[0]) {
++        const int b_stride = h->b_stride;
++        const int b_xy     = 4 * sl->mb_x + 4 * sl->mb_y * b_stride;
++        const int16_t (*mv_src)[2] = h->cur_pic.motion_val[0];
++
++        for (int row = 0; row < 4; row++) {
++            for (int col = 0; col < 4; col++) {
++                int idx = row * 4 + col;
++                int b   = b_xy + col + row * b_stride;
++                mv_out[idx][0] = mv_src[b][0];   /* dx  (quarter-pixel) */
++                mv_out[idx][1] = mv_src[b][1];   /* dy  (quarter-pixel) */
++            }
++        }
++    }
++
++    /* ------------------------------------------------------------------
++     * Write the fixed-size record to STRICT_FINAL_P.bin
++     * ------------------------------------------------------------------ */
++    int64_t frame_idx_val = g_p_frame_idx - 1;   /* current frame (just incremented above) */
++    int32_t mb_x = (int32_t)sl->mb_x;
++    int32_t mb_y = (int32_t)sl->mb_y;
++
++    fwrite(&frame_idx_val, sizeof(int64_t), 1, g_file_p);
++    fwrite(&mb_x,          sizeof(int32_t), 1, g_file_p);
++    fwrite(&mb_y,          sizeof(int32_t), 1, g_file_p);
++    fwrite(mv_out,         sizeof(mv_out),  1, g_file_p);
++}
+\ No newline at end of file
+diff --git a/libavcodec/h264_coeff_extract.h b/libavcodec/h264_coeff_extract.h
+new file mode 100644
+index 0000000000..6361da2c2d
+--- /dev/null
++++ b/libavcodec/h264_coeff_extract.h
+@@ -0,0 +1,112 @@
++/*
++ * H.264 Transform Coefficient Extractor
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/**
++ * @file
++ * H.264 DCT/transform coefficient and motion-vector extraction interface.
++ *
++ * This header exposes two extractors that intercept internal decoder data:
++ *
++ * 1. I-frame DCT coefficients (ff_h264_extract_coeffs)
++ *    Intercepts raw quantized transform coefficients from the entropy-decoded
++ *    H.264 bitstream (CAVLC or CABAC), before any inverse quantization or
++ *    inverse transform is applied.
++ *    Output: STRICT_FINAL_I.bin (or ${H264_COEFF_EXTRACT_FILE}_I.bin)
++ *
++ *    Per-macroblock record (little-endian):
++ *      int64_t  pts              presentation timestamp
++ *      int32_t  mb_x             macroblock column index
++ *      int32_t  mb_y             macroblock row index
++ *      int32_t  qp               quantization parameter
++ *      int32_t  slice_type       AV_PICTURE_TYPE_* value
++ *      int16_t  coeff[16*48]     raw quantized DCT coefficients
++ *      int16_t  luma_dc[16*3*2]  luma DC coefficients
++ *
++ * 2. P-frame motion vectors (ff_h264_extract_mvs)
++ *    Intercepts the decoded list-0 motion vectors for every macroblock of
++ *    every P-frame.  B-frames are silently skipped.
++ *    Output: STRICT_FINAL_P.bin (or ${H264_COEFF_EXTRACT_FILE}_P.bin)
++ *
++ *    Per-macroblock record (little-endian, fixed 80 bytes):
++ *      int64_t  frame_idx        sequential P-frame index (0, 1, 2, ...)
++ *      int32_t  mb_x             macroblock column
++ *      int32_t  mb_y             macroblock row
++ *      int16_t  mv[16][2]        16 sub-block {dx, dy} pairs (quarter-pixel)
++ *
++ * Usage:
++ *   Set the environment variable H264_COEFF_EXTRACT_FILE to a path prefix
++ *   before running any FFmpeg tool, e.g.
++ *       set H264_COEFF_EXTRACT_FILE=coeffs
++ *   Both files are always created.  If the variable is not set the prefix
++ *   defaults to "STRICT_FINAL".
++ */
++
++#ifndef AVCODEC_H264_COEFF_EXTRACT_H
++#define AVCODEC_H264_COEFF_EXTRACT_H
++
++#include <stdint.h>
++#include "h264dec.h"
++
++/**
++ * Initialise the coefficient extractor for the given codec context.
++ *
++ * Opens the output file specified by the H264_COEFF_EXTRACT_FILE environment
++ * variable.  If the variable is not set, extraction is disabled and all
++ * subsequent calls to ff_h264_extract_coeffs() are no-ops.
++ *
++ * @param avctx  codec context (used for logging only)
++ * @return 0 on success, or a negative AVERROR code on failure
++ */
++int ff_h264_coeff_extract_init(AVCodecContext *avctx);
++
++/**
++ * Close the coefficient extractor and flush/close the output file.
++ *
++ * Safe to call even when extraction was never initialised.
++ */
++void ff_h264_coeff_extract_close(void);
++
++/**
++ * Dump the quantized transform coefficients for one I-frame macroblock.
++ *
++ * Must be called *after* entropy decoding (CAVLC or CABAC) has filled
++ * sl->mb[] and *before* ff_h264_hl_decode_mb() is called so that the
++ * coefficients have not yet been inverse-quantized or inverse-transformed.
++ *
++ * @param h   H.264 context
++ * @param sl  slice context for the current macroblock
++ * @return 1 if I-frame extraction is active (caller should skip pixel reconstruction),
++ *         0 otherwise (normal decoding continues)
++ */
++int ff_h264_extract_coeffs(const H264Context *h, const H264SliceContext *sl);
++
++/**
++ * Dump the list-0 motion vectors for one P-frame macroblock.
++ *
++ * Must be called at the same hook point as ff_h264_extract_coeffs(), i.e.
++ * after ff_h264_decode_mb_cabac/cavlc() fills the slice context.
++ * B-frames and I-frames are silently ignored.
++ *
++ * @param h   H.264 context
++ * @param sl  slice context for the current macroblock
++ */
++void ff_h264_extract_mvs(const H264Context *h, const H264SliceContext *sl);
++
++#endif /* AVCODEC_H264_COEFF_EXTRACT_H */
+\ No newline at end of file
+diff --git a/libavcodec/h264_slice.c b/libavcodec/h264_slice.c
+index 0ce8e46c72..802a2152ea 100644
+--- a/libavcodec/h264_slice.c
++++ b/libavcodec/h264_slice.c
+@@ -48,6 +48,7 @@
+ #include "libavutil/refstruct.h"
+ #include "thread.h"
+ #include "threadframe.h"
++#include "h264_coeff_extract.h"
+ 
+ static const uint8_t field_scan[16+1] = {
+     0 + 0 * 4, 0 + 1 * 4, 1 + 0 * 4, 0 + 2 * 4,
+@@ -2621,8 +2622,18 @@ static int decode_slice(struct AVCodecContext *avctx, void *arg)
+ 
+             ret = ff_h264_decode_mb_cabac(h, sl);
+ 
+-            if (ret >= 0)
+-                ff_h264_hl_decode_mb(h, sl);
++            if (ret >= 0) {
++                /* --- coefficient extraction hook (CABAC, primary MB) ---
++                 * ff_h264_extract_coeffs() reads sl->mb[] which holds the
++                 * raw quantized transform coefficients right after entropy
++                 * decoding, before any inverse-quantization or IDCT.
++                 * Returns 1 when extraction is active -> skip pixel recon.
++                 * ff_h264_extract_mvs() dumps list-0 MVs for P-frames only
++                 * (B-frames silently skipped inside that function). */
++                ff_h264_extract_mvs(h, sl);
++                if (!ff_h264_extract_coeffs(h, sl))
++                    ff_h264_hl_decode_mb(h, sl);
++            }
+ 
+             // FIXME optimal? or let mb_decode decode 16x32 ?
+             if (ret >= 0 && FRAME_MBAFF(h)) {
+@@ -2630,8 +2641,12 @@ static int decode_slice(struct AVCodecContext *avctx, void *arg)
+ 
+                 ret = ff_h264_decode_mb_cabac(h, sl);
+ 
+-                if (ret >= 0)
+-                    ff_h264_hl_decode_mb(h, sl);
++                if (ret >= 0) {
++                    /* --- coefficient extraction hook (CABAC, MBAFF paired field) --- */
++                    ff_h264_extract_mvs(h, sl);
++                    if (!ff_h264_extract_coeffs(h, sl))
++                        ff_h264_hl_decode_mb(h, sl);
++                }
+                 sl->mb_y--;
+             }
+             eos = get_cabac_terminate(&sl->cabac);
+@@ -2692,16 +2707,28 @@ static int decode_slice(struct AVCodecContext *avctx, void *arg)
+ 
+             ret = ff_h264_decode_mb_cavlc(h, sl);
+ 
+-            if (ret >= 0)
+-                ff_h264_hl_decode_mb(h, sl);
++            if (ret >= 0) {
++                /* --- coefficient extraction hook (CAVLC, primary MB) ---
++                 * After CAVLC entropy decoding sl->mb[] holds the raw
++                 * quantized transform coefficients.  When extraction is
++                 * active we dump them and skip pixel reconstruction so
++                 * that the decoder terminates as early as possible. */
++                ff_h264_extract_mvs(h, sl);
++                if (!ff_h264_extract_coeffs(h, sl))
++                    ff_h264_hl_decode_mb(h, sl);
++            }
+ 
+             // FIXME optimal? or let mb_decode decode 16x32 ?
+             if (ret >= 0 && FRAME_MBAFF(h)) {
+                 sl->mb_y++;
+                 ret = ff_h264_decode_mb_cavlc(h, sl);
+ 
+-                if (ret >= 0)
+-                    ff_h264_hl_decode_mb(h, sl);
++                if (ret >= 0) {
++                    /* --- coefficient extraction hook (CAVLC, MBAFF paired field) --- */
++                    ff_h264_extract_mvs(h, sl);
++                    if (!ff_h264_extract_coeffs(h, sl))
++                        ff_h264_hl_decode_mb(h, sl);
++                }
+                 sl->mb_y--;
+             }
+ 
+@@ -2847,4 +2874,4 @@ int ff_h264_execute_decode_slices(H264Context *h)
+ finish:
+     h->nb_slice_ctx_queued = 0;
+     return ret;
+-}
++}
+\ No newline at end of file
+diff --git a/libavcodec/h264dec.c b/libavcodec/h264dec.c
+index 809a938386..84235f3aa6 100644
+--- a/libavcodec/h264dec.c
++++ b/libavcodec/h264dec.c
+@@ -56,6 +56,7 @@
+ #include "libavutil/refstruct.h"
+ #include "thread.h"
+ #include "threadframe.h"
++#include "h264_coeff_extract.h"
+ 
+ const uint16_t ff_h264_mb_sizes[4] = { 256, 384, 512, 768 };
+ 
+@@ -353,6 +354,9 @@ static av_cold int h264_decode_end(AVCodecContext *avctx)
+     H264Context *h = avctx->priv_data;
+     int i;
+ 
++    /* Flush and close the coefficient dump file (no-op if never opened). */
++    ff_h264_coeff_extract_close();
++
+     ff_h264_remove_all_refs(h);
+     ff_h264_free_tables(h);
+ 
+@@ -429,6 +433,11 @@ static av_cold int h264_decode_init(AVCodecContext *avctx)
+                "Use it at your own risk\n");
+     }
+ 
++    /* Coefficient extractor: open output file if H264_COEFF_EXTRACT_FILE is set. */
++    ret = ff_h264_coeff_extract_init(avctx);
++    if (ret < 0)
++        return ret;
++
+     return 0;
+ }
+ 
+@@ -1154,4 +1163,4 @@ const FFCodec ff_h264_decoder = {
+     UPDATE_THREAD_CONTEXT_FOR_USER(ff_h264_update_thread_context_for_user),
+     .p.profiles            = NULL_IF_CONFIG_SMALL(ff_h264_profiles),
+     .p.priv_class          = &h264_class,
+-};
++};
+\ No newline at end of file
+diff --git a/libavdevice/dshow.c b/libavdevice/dshow.c
+index 6e97304850..53fe6335f3 100644
+--- a/libavdevice/dshow.c
++++ b/libavdevice/dshow.c
+@@ -1849,7 +1849,7 @@ static int dshow_check_event_queue(IMediaEvent *media_event)
+     long code;
+     int ret = 0;
+ 
+-    while (IMediaEvent_GetEvent(media_event, &code, &p1, &p2, 0) != E_ABORT) {
++    while (IMediaEvent_GetEvent(media_event, (void *)&code, &p1, &p2, 0) != E_ABORT) {
+         if (code == EC_COMPLETE || code == EC_DEVICE_LOST || code == EC_ERRORABORT)
+             ret = -1;
+         IMediaEvent_FreeEventParams(media_event, code, p1, p2);
